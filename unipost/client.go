@@ -38,6 +38,7 @@ type Client struct {
 	Analytics *AnalyticsService
 	Connect   *ConnectService
 	Users     *UsersService
+	Profiles  *ProfilesService
 }
 
 // NewClient creates a new UniPost API client.
@@ -72,5 +73,6 @@ func NewClient(opts ...ClientOption) *Client {
 		Analytics: &AnalyticsService{http: h},
 		Connect:   &ConnectService{http: h},
 		Users:     &UsersService{http: h},
+		Profiles:  &ProfilesService{http: h},
 	}
 }

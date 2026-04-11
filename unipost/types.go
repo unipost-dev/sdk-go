@@ -14,9 +14,24 @@ const (
 	PlatformBluesky   Platform = "bluesky"
 )
 
+// Profile represents a workspace profile.
+type Profile struct {
+	ID          string `json:"id"`
+	WorkspaceID string `json:"workspace_id"`
+	Name        string `json:"name"`
+	CreatedAt   string `json:"created_at"`
+	UpdatedAt   string `json:"updated_at"`
+}
+
+// ListProfilesResponse is the response from listing profiles.
+type ListProfilesResponse struct {
+	Data []Profile `json:"data"`
+}
+
 // SocialAccount represents a connected social media account.
 type SocialAccount struct {
 	ID                string `json:"id"`
+	ProfileID         string `json:"profile_id,omitempty"`
 	Platform          string `json:"platform"`
 	AccountName       string `json:"account_name"`
 	ExternalUserID    string `json:"external_user_id,omitempty"`

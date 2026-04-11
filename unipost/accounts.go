@@ -16,6 +16,7 @@ type ListAccountsParams struct {
 	Platform       string
 	ExternalUserID string
 	Status         string
+	ProfileID      string
 }
 
 // List returns all connected social accounts.
@@ -30,6 +31,9 @@ func (s *AccountsService) List(ctx context.Context, params *ListAccountsParams) 
 		}
 		if params.Status != "" {
 			q.Set("status", params.Status)
+		}
+		if params.ProfileID != "" {
+			q.Set("profile_id", params.ProfileID)
 		}
 	}
 
