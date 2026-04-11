@@ -32,6 +32,7 @@ type ListProfilesResponse struct {
 type SocialAccount struct {
 	ID                string `json:"id"`
 	ProfileID         string `json:"profile_id,omitempty"`
+	ProfileName       string `json:"profile_name,omitempty"`
 	Platform          string `json:"platform"`
 	AccountName       string `json:"account_name"`
 	ExternalUserID    string `json:"external_user_id,omitempty"`
