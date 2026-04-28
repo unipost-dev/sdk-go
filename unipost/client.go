@@ -11,7 +11,7 @@ import (
 const (
 	defaultBaseURL = "https://api.unipost.dev"
 	defaultTimeout = 30 * time.Second
-	sdkVersion     = "0.2.4"
+	sdkVersion     = "0.2.5"
 	userAgent      = "unipost-go/" + sdkVersion
 )
 
