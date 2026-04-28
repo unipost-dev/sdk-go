@@ -3,56 +3,42 @@ package unipost
 import (
 	"encoding/json"
 	"fmt"
+	"strings"
 )
 
-// UniPostError is the base error type for all API errors.
-type UniPostError struct {
-	Status         int    // HTTP status code
-	Code           string // Original error code from the API
-	NormalizedCode string // Lowercased canonical code (e.g. "unauthorized")
-	Message        string // Human-readable message
+// APIError is returned for any non-2xx response from the UniPost API.
+//
+// Inspect the Code (or NormalizedCode) field to branch on error kind:
+//
+//	if apiErr, ok := err.(*unipost.APIError); ok {
+//	    switch apiErr.Code {
+//	    case "unauthorized":
+//	        // ...
+//	    case "not_found":
+//	        // ...
+//	    }
+//	}
+type APIError struct {
+	Status         int                 // HTTP status code
+	Code           string              // Resolved error code (prefers normalized_code)
+	NormalizedCode string              // Lowercased canonical code from the API
+	Message        string              // Human-readable message
+	Errors         map[string][]string // 422 field-level errors, when applicable
+	Platform       string              // Set on platform_error responses
+	RetryAfter     int                 // Set on rate_limit responses, in seconds
+	RequestID      string              // Server-assigned request id, for support tickets
 }
 
-func (e *UniPostError) Error() string {
+func (e *APIError) Error() string {
 	if e == nil {
 		return ""
 	}
-	code := e.NormalizedCode
+	code := firstNonEmpty(e.NormalizedCode, e.Code)
 	if code == "" {
-		code = e.Code
+		return fmt.Sprintf("unipost api error (%d): %s", e.Status, e.Message)
 	}
-	if code == "" {
-		return fmt.Sprintf("unipost: %s (status=%d)", e.Message, e.Status)
-	}
-	return fmt.Sprintf("unipost: %s (status=%d, code=%s)", e.Message, e.Status, code)
+	return fmt.Sprintf("unipost api error (%d %s): %s", e.Status, code, e.Message)
 }
-
-// AuthError represents a 401 authentication failure.
-type AuthError struct{ UniPostError }
-
-// NotFoundError represents a 404 not found.
-type NotFoundError struct{ UniPostError }
-
-// ValidationError represents a 422 validation failure.
-type ValidationError struct {
-	UniPostError
-	Errors map[string][]string
-}
-
-// RateLimitError represents a 429 rate limit exceeded.
-type RateLimitError struct {
-	UniPostError
-	RetryAfter int
-}
-
-// PlatformError represents a 502 platform-side error.
-type PlatformError struct {
-	UniPostError
-	Platform string
-}
-
-// QuotaError represents a 403 quota exceeded.
-type QuotaError struct{ UniPostError }
 
 type errorEnvelope struct {
 	Error struct {
@@ -76,34 +62,23 @@ func parseAPIError(status int, body []byte) error {
 	if msg == "" {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}
-	code := env.Error.Code
-	if code == "" {
-		code = env.Error.NormalizedCode
-	}
-	base := UniPostError{
+	return &APIError{
 		Status:         status,
-		Code:           code,
+		Code:           firstNonEmpty(env.Error.NormalizedCode, env.Error.Code),
 		NormalizedCode: env.Error.NormalizedCode,
 		Message:        msg,
+		Errors:         env.Error.Errors,
+		Platform:       env.Error.Platform,
+		RetryAfter:     env.Error.RetryAfter,
+		RequestID:      env.RequestID,
 	}
+}
 
-	switch status {
-	case 401:
-		return &AuthError{base}
-	case 404:
-		return &NotFoundError{base}
-	case 422:
-		return &ValidationError{UniPostError: base, Errors: env.Error.Errors}
-	case 429:
-		return &RateLimitError{UniPostError: base, RetryAfter: env.Error.RetryAfter}
-	case 403:
-		if env.Error.NormalizedCode == "quota_exceeded" || env.Error.Code == "quota_exceeded" {
-			return &QuotaError{base}
-		}
-	case 502:
-		if env.Error.Platform != "" {
-			return &PlatformError{UniPostError: base, Platform: env.Error.Platform}
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if strings.TrimSpace(v) != "" {
+			return v
 		}
 	}
-	return &base
+	return ""
 }

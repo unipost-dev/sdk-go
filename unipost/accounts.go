@@ -105,7 +105,7 @@ func (s *AccountsService) Get(ctx context.Context, accountID string) (*SocialAcc
 			return &a, nil
 		}
 	}
-	return nil, &NotFoundError{UniPostError: UniPostError{Status: 404, Code: "not_found", NormalizedCode: "not_found", Message: "account not found"}}
+	return nil, &APIError{Status: 404, Code: "not_found", NormalizedCode: "not_found", Message: "account not found"}
 }
 
 // Connect connects a BYO-token account.
