@@ -25,22 +25,30 @@ func TestNewClient_WithAPIKey(t *testing.T) {
 	if client.Users == nil {
 		t.Error("expected Users service")
 	}
+	if client.Workspace == nil {
+		t.Error("expected Workspace service")
+	}
+	if client.APIKeys == nil {
+		t.Error("expected APIKeys service")
+	}
+	if client.Webhooks == nil {
+		t.Error("expected Webhooks service")
+	}
+	if client.PlatformCredentials == nil {
+		t.Error("expected PlatformCredentials service")
+	}
+	if client.DeliveryJobs == nil {
+		t.Error("expected DeliveryJobs service")
+	}
 }
 
-func TestNewClient_PanicsWithoutKey(t *testing.T) {
-	// Ensure env var is not set
+func TestNewClient_FromEnv(t *testing.T) {
 	old := os.Getenv("UNIPOST_API_KEY")
-	os.Unsetenv("UNIPOST_API_KEY")
-	defer func() {
-		if old != "" {
-			os.Setenv("UNIPOST_API_KEY", old)
-		}
-	}()
+	os.Setenv("UNIPOST_API_KEY", "up_test_env_key")
+	defer os.Setenv("UNIPOST_API_KEY", old)
 
-	defer func() {
-		if r := recover(); r == nil {
-			t.Error("expected panic without API key")
-		}
-	}()
-	NewClient()
+	client := NewClient()
+	if client.apiKey != "up_test_env_key" {
+		t.Errorf("expected api key from env, got %q", client.apiKey)
+	}
 }

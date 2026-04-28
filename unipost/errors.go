@@ -1,16 +1,30 @@
 package unipost
 
-import "fmt"
+import (
+	"encoding/json"
+	"fmt"
+)
 
 // UniPostError is the base error type for all API errors.
 type UniPostError struct {
-	Message string
-	Status  int
-	Code    string
+	Status         int    // HTTP status code
+	Code           string // Original error code from the API
+	NormalizedCode string // Lowercased canonical code (e.g. "unauthorized")
+	Message        string // Human-readable message
 }
 
 func (e *UniPostError) Error() string {
-	return fmt.Sprintf("unipost: %s (status=%d, code=%s)", e.Message, e.Status, e.Code)
+	if e == nil {
+		return ""
+	}
+	code := e.NormalizedCode
+	if code == "" {
+		code = e.Code
+	}
+	if code == "" {
+		return fmt.Sprintf("unipost: %s (status=%d)", e.Message, e.Status)
+	}
+	return fmt.Sprintf("unipost: %s (status=%d, code=%s)", e.Message, e.Status, code)
 }
 
 // AuthError represents a 401 authentication failure.
@@ -31,28 +45,47 @@ type RateLimitError struct {
 	RetryAfter int
 }
 
-// PlatformError represents a platform-side error.
+// PlatformError represents a 502 platform-side error.
 type PlatformError struct {
 	UniPostError
 	Platform string
 }
 
-// QuotaError represents a quota exceeded error.
+// QuotaError represents a 403 quota exceeded.
 type QuotaError struct{ UniPostError }
 
-// parseAPIError converts an HTTP status and error body into a typed error.
-func parseAPIError(status int, body map[string]interface{}) error {
-	errObj, _ := body["error"].(map[string]interface{})
-	msg, _ := errObj["message"].(string)
-	code, _ := errObj["code"].(string)
-	if msg == "" {
-		msg = "Unknown API error"
-	}
-	if code == "" {
-		code = "unknown"
+type errorEnvelope struct {
+	Error struct {
+		Code           string              `json:"code"`
+		NormalizedCode string              `json:"normalized_code"`
+		Message        string              `json:"message"`
+		Errors         map[string][]string `json:"errors"`
+		Platform       string              `json:"platform"`
+		RetryAfter     int                 `json:"retry_after"`
+	} `json:"error"`
+	RequestID string `json:"request_id"`
+}
+
+func parseAPIError(status int, body []byte) error {
+	var env errorEnvelope
+	if len(body) > 0 {
+		_ = json.Unmarshal(body, &env)
 	}
 
-	base := UniPostError{Message: msg, Status: status, Code: code}
+	msg := env.Error.Message
+	if msg == "" {
+		msg = fmt.Sprintf("HTTP %d", status)
+	}
+	code := env.Error.Code
+	if code == "" {
+		code = env.Error.NormalizedCode
+	}
+	base := UniPostError{
+		Status:         status,
+		Code:           code,
+		NormalizedCode: env.Error.NormalizedCode,
+		Message:        msg,
+	}
 
 	switch status {
 	case 401:
@@ -60,31 +93,17 @@ func parseAPIError(status int, body map[string]interface{}) error {
 	case 404:
 		return &NotFoundError{base}
 	case 422:
-		ve := &ValidationError{UniPostError: base}
-		if errs, ok := errObj["errors"].(map[string]interface{}); ok {
-			ve.Errors = make(map[string][]string)
-			for k, v := range errs {
-				if arr, ok := v.([]interface{}); ok {
-					for _, item := range arr {
-						if s, ok := item.(string); ok {
-							ve.Errors[k] = append(ve.Errors[k], s)
-						}
-					}
-				}
-			}
-		}
-		return ve
+		return &ValidationError{UniPostError: base, Errors: env.Error.Errors}
 	case 429:
-		return &RateLimitError{UniPostError: base}
+		return &RateLimitError{UniPostError: base, RetryAfter: env.Error.RetryAfter}
 	case 403:
-		if code == "quota_exceeded" {
+		if env.Error.NormalizedCode == "quota_exceeded" || env.Error.Code == "quota_exceeded" {
 			return &QuotaError{base}
 		}
 	case 502:
-		if platform, ok := errObj["platform"].(string); ok {
-			return &PlatformError{UniPostError: base, Platform: platform}
+		if env.Error.Platform != "" {
+			return &PlatformError{UniPostError: base, Platform: env.Error.Platform}
 		}
 	}
-
 	return &base
 }
