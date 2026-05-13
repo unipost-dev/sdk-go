@@ -66,6 +66,22 @@ if err != nil {
 fmt.Println(connect.AuthURL)
 ```
 
+### Connect (Managed Users)
+
+```go
+session, err := client.Connect.CreateSession(ctx, &unipost.CreateConnectSessionParams{
+    Platform:              "twitter",
+    ExternalUserID:        "your_user_123",
+    ReturnURL:             "https://yourapp.com/callback",
+    AllowQuickstartCreds:  true, // optional
+})
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(session.URL)
+```
+
 ### Create Posts
 
 ```go

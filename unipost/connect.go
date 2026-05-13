@@ -11,6 +11,7 @@ import (
 type ConnectSession struct {
 	ID                       string     `json:"id"`
 	URL                      string     `json:"url"`
+	AllowQuickstartCreds     bool       `json:"allow_quickstart_creds"`
 	Status                   string     `json:"status"` // "pending" | "completed" | "expired"
 	ExpiresAt                time.Time  `json:"expires_at"`
 	Platform                 string     `json:"platform"`
@@ -24,11 +25,12 @@ type ConnectSession struct {
 
 // CreateConnectSessionParams configures a Connect session.
 type CreateConnectSessionParams struct {
-	Platform          string `json:"platform"`
-	ProfileID         string `json:"profile_id,omitempty"`
-	ExternalUserID    string `json:"external_user_id"`
-	ExternalUserEmail string `json:"external_user_email,omitempty"`
-	ReturnURL         string `json:"return_url,omitempty"`
+	Platform             string `json:"platform"`
+	ProfileID            string `json:"profile_id,omitempty"`
+	ExternalUserID       string `json:"external_user_id"`
+	ExternalUserEmail    string `json:"external_user_email,omitempty"`
+	ReturnURL            string `json:"return_url,omitempty"`
+	AllowQuickstartCreds bool   `json:"allow_quickstart_creds"`
 }
 
 // GetConnectURLParams configures a self-owned OAuth auth URL lookup.
