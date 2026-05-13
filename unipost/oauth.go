@@ -17,12 +17,14 @@ type OAuthService struct {
 
 // Connect returns the auth URL to redirect a user to for the given platform.
 func (s *OAuthService) Connect(ctx context.Context, platform, redirectURL string) (*OAuthConnectResponse, error) {
-	q := map[string]string{}
+	body := map[string]string{
+		"platform": platform,
+	}
 	if redirectURL != "" {
-		q["redirect_url"] = redirectURL
+		body["redirect_url"] = redirectURL
 	}
 	var env apiEnvelope[OAuthConnectResponse]
-	if err := s.client.do(ctx, http.MethodGet, "/v1/oauth/connect/"+platform, q, nil, &env, nil); err != nil {
+	if err := s.client.do(ctx, http.MethodPost, "/v1/oauth/connect", nil, body, &env, nil); err != nil {
 		return nil, err
 	}
 	return &env.Data, nil

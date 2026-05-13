@@ -33,9 +33,9 @@ type CreateConnectSessionParams struct {
 
 // GetConnectURLParams configures a self-owned OAuth auth URL lookup.
 type GetConnectURLParams struct {
-	ProfileID   string
-	Platform    string
-	RedirectURL string
+	ProfileID   string `json:"profile_id,omitempty"`
+	Platform    string `json:"platform"`
+	RedirectURL string `json:"redirect_url,omitempty"`
 }
 
 // ConnectService handles Connect (managed OAuth) operations.
@@ -54,18 +54,13 @@ func (s *ConnectService) GetConnectURL(ctx context.Context, params *GetConnectUR
 		return nil, errors.New("platform is required")
 	}
 
-	q := map[string]string{}
-	if params.RedirectURL != "" {
-		q["redirect_url"] = params.RedirectURL
-	}
-
 	var env apiEnvelope[OAuthConnectResponse]
 	if err := s.client.do(
 		ctx,
-		http.MethodGet,
-		"/v1/profiles/"+params.ProfileID+"/oauth/connect/"+params.Platform,
-		q,
+		http.MethodPost,
+		"/v1/oauth/connect",
 		nil,
+		params,
 		&env,
 		nil,
 	); err != nil {
