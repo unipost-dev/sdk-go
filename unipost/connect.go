@@ -2,6 +2,7 @@ package unipost
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"time"
 )
@@ -30,9 +31,47 @@ type CreateConnectSessionParams struct {
 	ReturnURL         string `json:"return_url,omitempty"`
 }
 
+// GetConnectURLParams configures a self-owned OAuth auth URL lookup.
+type GetConnectURLParams struct {
+	ProfileID   string
+	Platform    string
+	RedirectURL string
+}
+
 // ConnectService handles Connect (managed OAuth) operations.
 type ConnectService struct {
 	client *Client
+}
+
+func (s *ConnectService) GetConnectURL(ctx context.Context, params *GetConnectURLParams) (*OAuthConnectResponse, error) {
+	if params == nil {
+		return nil, errors.New("get connect URL params are required")
+	}
+	if params.ProfileID == "" {
+		return nil, errors.New("profile ID is required")
+	}
+	if params.Platform == "" {
+		return nil, errors.New("platform is required")
+	}
+
+	q := map[string]string{}
+	if params.RedirectURL != "" {
+		q["redirect_url"] = params.RedirectURL
+	}
+
+	var env apiEnvelope[OAuthConnectResponse]
+	if err := s.client.do(
+		ctx,
+		http.MethodGet,
+		"/v1/profiles/"+params.ProfileID+"/oauth/connect/"+params.Platform,
+		q,
+		nil,
+		&env,
+		nil,
+	); err != nil {
+		return nil, err
+	}
+	return &env.Data, nil
 }
 
 func (s *ConnectService) CreateSession(ctx context.Context, params *CreateConnectSessionParams) (*ConnectSession, error) {

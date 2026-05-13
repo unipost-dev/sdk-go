@@ -51,6 +51,21 @@ accounts, err := client.Accounts.List(ctx, &unipost.ListAccountsParams{
 })
 ```
 
+### Get Connect URL (Your Own Accounts)
+
+```go
+connect, err := client.Connect.GetConnectURL(ctx, &unipost.GetConnectURLParams{
+    ProfileID:   "pr_brand_us",
+    Platform:    "linkedin",
+    RedirectURL: "https://app.acme.com/integrations/done", // optional
+})
+if err != nil {
+    panic(err)
+}
+
+fmt.Println(connect.AuthURL)
+```
+
 ### Create Posts
 
 ```go
