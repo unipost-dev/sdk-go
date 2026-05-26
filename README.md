@@ -114,6 +114,27 @@ post, err := client.Posts.Create(ctx, &unipost.CreatePostParams{
 })
 ```
 
+### Analytics Explorer
+
+```go
+posts, err := client.Analytics.Posts(ctx, &unipost.AnalyticsPostsParams{
+    Platform: "tiktok",
+    Limit:    25,
+    Sort:     "engagement_rate",
+})
+
+platforms, err := client.Analytics.Platforms(ctx, nil)
+tiktok, err := client.Analytics.Platform(ctx, "tiktok", nil)
+csv, err := client.Analytics.ExportPostsCSV(ctx, &unipost.AnalyticsPostsParams{
+    Platform: "pinterest",
+})
+
+_, err = client.Analytics.Refresh(ctx, &unipost.AnalyticsRefreshParams{
+    Platform: "threads",
+    Limit:    100,
+})
+```
+
 ### Error Handling
 
 ```go
