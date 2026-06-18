@@ -169,3 +169,49 @@ func (c *Client) doText(ctx context.Context, method, path string, query map[stri
 	}
 	return "", fmt.Errorf("unipost: request failed after retries")
 }
+
+func (c *Client) doStream(ctx context.Context, path string, query map[string]string, headers map[string]string) (*http.Response, error) {
+	if c.apiKey == "" {
+		return nil, fmt.Errorf("unipost: API key is required (set UNIPOST_API_KEY or use WithAPIKey)")
+	}
+
+	full, err := url.Parse(c.baseURL + path)
+	if err != nil {
+		return nil, fmt.Errorf("unipost: invalid URL: %w", err)
+	}
+	if len(query) > 0 {
+		values := full.Query()
+		for k, v := range query {
+			if strings.TrimSpace(v) != "" {
+				values.Set(k, v)
+			}
+		}
+		full.RawQuery = values.Encode()
+	}
+
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, full.String(), nil)
+	if err != nil {
+		return nil, fmt.Errorf("unipost: request error: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set("Accept", "text/event-stream")
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("unipost: HTTP error: %w", err)
+	}
+	if resp.StatusCode >= 200 && resp.StatusCode < 300 {
+		return resp, nil
+	}
+
+	body, readErr := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if readErr != nil {
+		return nil, fmt.Errorf("unipost: read error: %w", readErr)
+	}
+	return nil, parseAPIError(resp.StatusCode, body)
+}

@@ -65,6 +65,7 @@ type Client struct {
 	Webhooks            *WebhooksService
 	OAuth               *OAuthService
 	Usage               *UsageService
+	Logs                *LogsService
 }
 
 // NewClient creates a new UniPost API client.
@@ -100,5 +101,6 @@ func NewClient(opts ...Option) *Client {
 	c.Webhooks = &WebhooksService{client: c}
 	c.OAuth = &OAuthService{client: c}
 	c.Usage = &UsageService{client: c}
+	c.Logs = &LogsService{client: c}
 	return c
 }

@@ -5,12 +5,14 @@ Post to 7 social platforms with one API call.
 
 ## Latest release: v0.3.0
 
-Analytics Explorer APIs are now available in this SDK.
+Analytics Explorer and Developer Logs APIs are now available in this SDK.
 
 - Query post-level analytics with filters and sorting.
 - Export analytics rows as CSV for reporting workflows.
 - Inspect platform analytics availability and metric summaries.
 - Trigger analytics refresh jobs for supported platforms.
+- Backfill workspace developer logs with cursor pagination.
+- Stream near-real-time logs with Server-Sent Events replay.
 
 Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
 
@@ -144,6 +146,41 @@ _, err = client.Analytics.Refresh(ctx, &unipost.AnalyticsRefreshParams{
     Platform: "threads",
     Limit:    100,
 })
+```
+
+### Developer Logs
+
+```go
+logs, err := client.Logs.List(ctx, &unipost.LogListParams{
+    Status: "error",
+    Limit:  50,
+})
+if err != nil {
+    panic(err)
+}
+
+afterID := int64(0)
+if len(logs.Data) > 0 {
+    afterID = logs.Data[0].ID - 1
+    entry, err := client.Logs.Get(ctx, logs.Data[0].ID)
+    if err != nil {
+        panic(err)
+    }
+    fmt.Println(entry.Action, entry.RequestPayload)
+}
+
+stream, err := client.Logs.Stream(ctx, &unipost.LogStreamParams{
+    Status:  "error",
+    AfterID: afterID,
+})
+if err != nil {
+    panic(err)
+}
+defer stream.Close()
+
+if stream.Next() {
+    fmt.Println(stream.Event().ID, stream.Event().Action)
+}
 ```
 
 ### Error Handling

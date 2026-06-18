@@ -40,6 +40,9 @@ func TestNewClient_WithAPIKey(t *testing.T) {
 	if client.DeliveryJobs == nil {
 		t.Error("expected DeliveryJobs service")
 	}
+	if client.Logs == nil {
+		t.Error("expected Logs service")
+	}
 }
 
 func TestNewClient_FromEnv(t *testing.T) {
