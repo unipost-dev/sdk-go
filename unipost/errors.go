@@ -19,14 +19,18 @@ import (
 //	    }
 //	}
 type APIError struct {
-	Status         int                 // HTTP status code
-	Code           string              // Resolved error code (prefers normalized_code)
-	NormalizedCode string              // Lowercased canonical code from the API
-	Message        string              // Human-readable message
-	Errors         map[string][]string // 422 field-level errors, when applicable
-	Platform       string              // Set on platform_error responses
-	RetryAfter     int                 // Set on rate_limit responses, in seconds
-	RequestID      string              // Server-assigned request id, for support tickets
+	Status           int                 // HTTP status code
+	Code             string              // Resolved error code (prefers normalized_code)
+	NormalizedCode   string              // Lowercased canonical code from the API
+	Message          string              // Human-readable message
+	Errors           map[string][]string // 422 field-level errors, when applicable
+	Platform         string              // Set on platform_error responses
+	RetryAfter       int                 // Set on rate_limit responses, in seconds
+	RequestID        string              // Server-assigned request id, for support tickets
+	ErrorSource      ErrorSource         // Source of the failure, when classified by the API
+	ErrorTemporality ErrorTemporality    // Whether retrying may be useful, when classified by the API
+	ProviderError    *ProviderError      // Sanitized platform metadata, when available
+	RetryPolicy      *RetryPolicy        // Best-effort retry queue snapshot, when available
 }
 
 func (e *APIError) Error() string {
@@ -42,12 +46,16 @@ func (e *APIError) Error() string {
 
 type errorEnvelope struct {
 	Error struct {
-		Code           string              `json:"code"`
-		NormalizedCode string              `json:"normalized_code"`
-		Message        string              `json:"message"`
-		Errors         map[string][]string `json:"errors"`
-		Platform       string              `json:"platform"`
-		RetryAfter     int                 `json:"retry_after"`
+		Code             string              `json:"code"`
+		NormalizedCode   string              `json:"normalized_code"`
+		Message          string              `json:"message"`
+		Errors           map[string][]string `json:"errors"`
+		Platform         string              `json:"platform"`
+		RetryAfter       int                 `json:"retry_after"`
+		ErrorSource      ErrorSource         `json:"error_source"`
+		ErrorTemporality ErrorTemporality    `json:"error_temporality"`
+		ProviderError    *ProviderError      `json:"provider_error"`
+		RetryPolicy      *RetryPolicy        `json:"retry_policy"`
 	} `json:"error"`
 	RequestID string `json:"request_id"`
 }
@@ -63,14 +71,18 @@ func parseAPIError(status int, body []byte) error {
 		msg = fmt.Sprintf("HTTP %d", status)
 	}
 	return &APIError{
-		Status:         status,
-		Code:           firstNonEmpty(env.Error.NormalizedCode, env.Error.Code),
-		NormalizedCode: env.Error.NormalizedCode,
-		Message:        msg,
-		Errors:         env.Error.Errors,
-		Platform:       env.Error.Platform,
-		RetryAfter:     env.Error.RetryAfter,
-		RequestID:      env.RequestID,
+		Status:           status,
+		Code:             firstNonEmpty(env.Error.NormalizedCode, env.Error.Code),
+		NormalizedCode:   env.Error.NormalizedCode,
+		Message:          msg,
+		Errors:           env.Error.Errors,
+		Platform:         env.Error.Platform,
+		RetryAfter:       env.Error.RetryAfter,
+		RequestID:        env.RequestID,
+		ErrorSource:      env.Error.ErrorSource,
+		ErrorTemporality: env.Error.ErrorTemporality,
+		ProviderError:    env.Error.ProviderError,
+		RetryPolicy:      env.Error.RetryPolicy,
 	}
 }
 
