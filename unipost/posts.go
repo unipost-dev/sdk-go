@@ -9,17 +9,21 @@ import (
 
 // PlatformResult represents a per-platform delivery result for a post.
 type PlatformResult struct {
-	ID              string   `json:"id,omitempty"`
-	SocialAccountID string   `json:"social_account_id"`
-	Platform        string   `json:"platform,omitempty"`
-	AccountName     string   `json:"account_name,omitempty"`
-	Caption         string   `json:"caption,omitempty"`
-	Status          string   `json:"status"`
-	ExternalID      string   `json:"external_id,omitempty"`
-	URL             string   `json:"url,omitempty"`
-	ErrorMessage    string   `json:"error_message,omitempty"`
-	PublishedAt     string   `json:"published_at,omitempty"`
-	Warnings        []string `json:"warnings,omitempty"`
+	ID               string           `json:"id,omitempty"`
+	SocialAccountID  string           `json:"social_account_id"`
+	Platform         string           `json:"platform,omitempty"`
+	AccountName      string           `json:"account_name,omitempty"`
+	Caption          string           `json:"caption,omitempty"`
+	Status           string           `json:"status"`
+	ExternalID       string           `json:"external_id,omitempty"`
+	URL              string           `json:"url,omitempty"`
+	ErrorMessage     string           `json:"error_message,omitempty"`
+	ErrorSource      ErrorSource      `json:"error_source,omitempty"`
+	ErrorTemporality ErrorTemporality `json:"error_temporality,omitempty"`
+	ProviderError    *ProviderError   `json:"provider_error,omitempty"`
+	RetryPolicy      *RetryPolicy     `json:"retry_policy,omitempty"`
+	PublishedAt      string           `json:"published_at,omitempty"`
+	Warnings         []string         `json:"warnings,omitempty"`
 }
 
 // Post represents a social media post.

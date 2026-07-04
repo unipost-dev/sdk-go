@@ -11,7 +11,7 @@ import (
 const (
 	defaultBaseURL = "https://api.unipost.dev"
 	defaultTimeout = 30 * time.Second
-	sdkVersion     = "0.4.0"
+	sdkVersion     = "0.5.0"
 	userAgent      = "unipost-go/" + sdkVersion
 )
 
@@ -95,6 +95,7 @@ func NewClient(opts ...Option) *Client {
 	c.Posts = &PostsService{client: c}
 	c.DeliveryJobs = &DeliveryJobsService{client: c}
 	c.Media = &MediaService{client: c}
+	c.Media.AudioOverlays = &AudioOverlaysService{client: c}
 	c.Analytics = &AnalyticsService{client: c}
 	c.Connect = &ConnectService{client: c}
 	c.Users = &UsersService{client: c}

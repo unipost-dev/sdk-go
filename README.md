@@ -3,16 +3,14 @@
 Official UniPost API client for Go.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.4.0
+## Latest release: v0.5.0
 
-Analytics Explorer and Developer Logs APIs are now available in this SDK.
+Media uploads now support custom audio overlay jobs and optional reserve-time file sizes.
 
-- Query post-level analytics with filters and sorting.
-- Export analytics rows as CSV for reporting workflows.
-- Inspect platform analytics availability and metric summaries.
-- Trigger analytics refresh jobs for supported platforms.
-- Backfill workspace developer logs with cursor pagination.
-- Stream near-real-time logs with Server-Sent Events replay.
+- Use `client.Media.AudioOverlays.Create(...)` to combine one uploaded video with one uploaded audio file.
+- Poll the job with `client.Media.AudioOverlays.Get(...)`, then publish the returned `OutputMediaID`.
+- Leave `SizeBytes` as zero when reserving media if your app cannot know the raw file length up front.
+- Post failure responses also include the typed v0.4.1 error contract fields.
 
 Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
 
@@ -181,6 +179,54 @@ defer stream.Close()
 if stream.Next() {
     fmt.Println(stream.Event().ID, stream.Event().Action)
 }
+```
+
+### Media Upload
+
+```go
+reserved, err := client.Media.Upload(ctx, &unipost.MediaUploadRequest{
+    Filename:    "voiceover.mp3",
+    ContentType: "audio/mpeg",
+    // SizeBytes is optional.
+})
+if err != nil {
+    panic(err)
+}
+fmt.Println(reserved.MediaID)
+```
+
+### Custom Audio Overlay
+
+```go
+videoVolume := int32(70)
+job, err := client.Media.AudioOverlays.Create(ctx, &unipost.AudioOverlayCreateRequest{
+    VideoMediaID: "media_video_123",
+    AudioMediaID: "media_audio_456",
+    Mode:         "mix",
+    VideoVolume:  &videoVolume,
+    Fit:          "trim_to_video",
+}, unipost.WithIdempotencyKey("overlay-demo-001"))
+if err != nil {
+    panic(err)
+}
+
+for job.Status == "queued" || job.Status == "processing" {
+    time.Sleep(1500 * time.Millisecond)
+    job, err = client.Media.AudioOverlays.Get(ctx, job.ID)
+    if err != nil {
+        panic(err)
+    }
+}
+
+if job.Status != "succeeded" || job.OutputMediaID == nil {
+    panic("audio overlay failed")
+}
+
+post, err := client.Posts.Create(ctx, &unipost.CreatePostParams{
+    Caption:  "Video with custom audio",
+    AccountIDs: []string{"sa_tiktok_xxx"},
+    MediaIDs: []string{*job.OutputMediaID},
+})
 ```
 
 ### Error Handling
