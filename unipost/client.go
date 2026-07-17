@@ -96,6 +96,7 @@ func NewClient(opts ...Option) *Client {
 	c.DeliveryJobs = &DeliveryJobsService{client: c}
 	c.Media = &MediaService{client: c}
 	c.Media.AudioOverlays = &AudioOverlaysService{client: c}
+	c.Media.GIFConversions = &GIFConversionsService{client: c, media: c.Media}
 	c.Analytics = &AnalyticsService{client: c}
 	c.Connect = &ConnectService{client: c}
 	c.Users = &UsersService{client: c}
