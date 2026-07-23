@@ -15,14 +15,20 @@ import (
 
 const maxRetries = 2
 
-func (c *Client) do(ctx context.Context, method, path string, query map[string]string, body any, out any, headers map[string]string) error {
+type responseAwareHTTPResult struct {
+	StatusCode int
+	Header     http.Header
+	Body       []byte
+}
+
+func (c *Client) prepareJSONRequest(path string, query map[string]string, body any) (string, []byte, error) {
 	if c.apiKey == "" {
-		return fmt.Errorf("unipost: API key is required (set UNIPOST_API_KEY or use WithAPIKey)")
+		return "", nil, fmt.Errorf("unipost: API key is required (set UNIPOST_API_KEY or use WithAPIKey)")
 	}
 
 	full, err := url.Parse(c.baseURL + path)
 	if err != nil {
-		return fmt.Errorf("unipost: invalid URL: %w", err)
+		return "", nil, fmt.Errorf("unipost: invalid URL: %w", err)
 	}
 	if len(query) > 0 {
 		values := full.Query()
@@ -38,27 +44,43 @@ func (c *Client) do(ctx context.Context, method, path string, query map[string]s
 	if body != nil {
 		raw, err = json.Marshal(body)
 		if err != nil {
-			return fmt.Errorf("unipost: marshal error: %w", err)
+			return "", nil, fmt.Errorf("unipost: marshal error: %w", err)
 		}
+	}
+	return full.String(), raw, nil
+}
+
+func (c *Client) newJSONRequest(ctx context.Context, method, fullURL string, raw []byte, headers map[string]string) (*http.Request, error) {
+	var payload io.Reader
+	if raw != nil {
+		payload = bytes.NewReader(raw)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, fullURL, payload)
+	if err != nil {
+		return nil, fmt.Errorf("unipost: request error: %w", err)
+	}
+	req.Header.Set("Authorization", "Bearer "+c.apiKey)
+	req.Header.Set("User-Agent", userAgent)
+	if raw != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	for k, v := range headers {
+		req.Header.Set(k, v)
+	}
+	return req, nil
+}
+
+func (c *Client) do(ctx context.Context, method, path string, query map[string]string, body any, out any, headers map[string]string) error {
+	full, raw, err := c.prepareJSONRequest(path, query, body)
+	if err != nil {
+		return err
 	}
 
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		var payload io.Reader
-		if raw != nil {
-			payload = bytes.NewReader(raw)
-		}
-		req, err := http.NewRequestWithContext(ctx, method, full.String(), payload)
+		req, err := c.newJSONRequest(ctx, method, full, raw, headers)
 		if err != nil {
-			return fmt.Errorf("unipost: request error: %w", err)
-		}
-		req.Header.Set("Authorization", "Bearer "+c.apiKey)
-		req.Header.Set("User-Agent", userAgent)
-		if raw != nil {
-			req.Header.Set("Content-Type", "application/json")
-		}
-		for k, v := range headers {
-			req.Header.Set(k, v)
+			return err
 		}
 
 		resp, err := c.http.Do(req)
@@ -101,6 +123,39 @@ func (c *Client) do(ctx context.Context, method, path string, query map[string]s
 		return lastErr
 	}
 	return fmt.Errorf("unipost: request failed after retries")
+}
+
+// doResponseOnce performs one JSON request while retaining response metadata.
+// It is intentionally separate from do's retry loop for writes whose outcome
+// must not be replayed automatically.
+func (c *Client) doResponseOnce(ctx context.Context, method, path string, query map[string]string, body any, headers map[string]string) (*responseAwareHTTPResult, error) {
+	full, raw, err := c.prepareJSONRequest(path, query, body)
+	if err != nil {
+		return nil, err
+	}
+	req, err := c.newJSONRequest(ctx, method, full, raw, headers)
+	if err != nil {
+		return nil, err
+	}
+
+	requestClient := *c.http
+	requestClient.CheckRedirect = func(_ *http.Request, _ []*http.Request) error {
+		return http.ErrUseLastResponse
+	}
+	resp, err := requestClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("unipost: HTTP error: %w", err)
+	}
+	respBody, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("unipost: read error: %w", err)
+	}
+	return &responseAwareHTTPResult{
+		StatusCode: resp.StatusCode,
+		Header:     resp.Header.Clone(),
+		Body:       respBody,
+	}, nil
 }
 
 func (c *Client) doText(ctx context.Context, method, path string, query map[string]string, headers map[string]string) (string, error) {

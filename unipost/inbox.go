@@ -2,6 +2,8 @@ package unipost
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -73,6 +75,37 @@ type InboxListParams struct {
 type InboxListResponse struct {
 	Data      []InboxItem `json:"data"`
 	RequestID *string     `json:"request_id,omitempty"`
+}
+
+// InboxReplyRequest is the body of an Inbox reply request.
+type InboxReplyRequest struct {
+	Text string `json:"text"`
+}
+
+// InboxReplyState identifies whether a reply completed or requires polling.
+type InboxReplyState string
+
+const (
+	InboxReplyStateCompleted   InboxReplyState = "completed"
+	InboxReplyStateReconciling InboxReplyState = "reconciling"
+)
+
+const inboxReplyReconcilingCode = "X_REMOTE_ACCEPTED_RECONCILING"
+
+var errInvalidInboxReplyResponse = errors.New("unipost: invalid Inbox reply response")
+
+// InboxReplyResult is the response-aware result of an Inbox reply.
+//
+// When State is InboxReplyStateCompleted, Item is non-nil and OperationID is
+// optional. When State is InboxReplyStateReconciling, Item is nil and
+// OperationID, Code, and Message are non-empty; RequestID is optional.
+type InboxReplyResult struct {
+	State       InboxReplyState
+	Item        *InboxItem
+	OperationID string
+	Code        string
+	Message     string
+	RequestID   *string
 }
 
 type inboxScopeKind string
@@ -161,4 +194,128 @@ func (s *ScopedInboxService) List(ctx context.Context, params *InboxListParams) 
 		return nil, err
 	}
 	return &result, nil
+}
+
+// Reply sends one reply in the bound scope. It never automatically retries or
+// follows redirects because doing so could duplicate an external write.
+func (s *ScopedInboxService) Reply(ctx context.Context, id string, request *InboxReplyRequest, opts ...RequestOption) (*InboxReplyResult, error) {
+	escapedID, err := inboxPathID(id)
+	if err != nil {
+		return nil, err
+	}
+	if request == nil {
+		return nil, fmt.Errorf("unipost: Inbox reply request is required")
+	}
+	values, err := s.scope.query()
+	if err != nil {
+		return nil, err
+	}
+	query := make(map[string]string, len(values))
+	for key := range values {
+		query[key] = values.Get(key)
+	}
+
+	headers := make(map[string]string, 1)
+	options := collectRequestOptions(opts)
+	if options.idempotencyKey != "" {
+		headers["Idempotency-Key"] = options.idempotencyKey
+	}
+	response, err := s.client.doResponseOnce(
+		ctx,
+		http.MethodPost,
+		"/v1/inbox/"+escapedID+"/reply",
+		query,
+		request,
+		headers,
+	)
+	if err != nil {
+		return nil, err
+	}
+
+	switch response.StatusCode {
+	case http.StatusOK:
+		return decodeInboxReplyCompleted(response)
+	case http.StatusAccepted:
+		return decodeInboxReplyReconciling(response)
+	default:
+		if response.StatusCode >= 200 && response.StatusCode < 300 {
+			return nil, errInvalidInboxReplyResponse
+		}
+		return nil, parseAPIError(response.StatusCode, response.Body)
+	}
+}
+
+func inboxPathID(id string) (string, error) {
+	trimmed := strings.TrimSpace(id)
+	if trimmed == "" || trimmed == "." || trimmed == ".." {
+		return "", fmt.Errorf("unipost: Inbox item ID is required and must be safe")
+	}
+	return url.PathEscape(id), nil
+}
+
+func decodeInboxReplyCompleted(response *responseAwareHTTPResult) (*InboxReplyResult, error) {
+	var envelope struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err := json.Unmarshal(response.Body, &envelope); err != nil || len(envelope.Data) == 0 || string(envelope.Data) == "null" {
+		return nil, errInvalidInboxReplyResponse
+	}
+
+	var fields map[string]json.RawMessage
+	if err := json.Unmarshal(envelope.Data, &fields); err != nil {
+		return nil, errInvalidInboxReplyResponse
+	}
+	requiredFields := [...]string{
+		"id",
+		"social_account_id",
+		"workspace_id",
+		"source",
+		"external_id",
+		"thread_key",
+		"thread_status",
+		"is_read",
+		"is_own",
+		"received_at",
+		"created_at",
+	}
+	for _, field := range requiredFields {
+		value, ok := fields[field]
+		if !ok || string(value) == "null" {
+			return nil, errInvalidInboxReplyResponse
+		}
+	}
+
+	var item InboxItem
+	if err := json.Unmarshal(envelope.Data, &item); err != nil {
+		return nil, errInvalidInboxReplyResponse
+	}
+	return &InboxReplyResult{
+		State:       InboxReplyStateCompleted,
+		Item:        &item,
+		OperationID: strings.TrimSpace(response.Header.Get("X-UniPost-Operation-Id")),
+	}, nil
+}
+
+func decodeInboxReplyReconciling(response *responseAwareHTTPResult) (*InboxReplyResult, error) {
+	var envelope struct {
+		Error *struct {
+			Code    string `json:"code"`
+			Message string `json:"message"`
+		} `json:"error"`
+		RequestID *string `json:"request_id,omitempty"`
+	}
+	if err := json.Unmarshal(response.Body, &envelope); err != nil || envelope.Error == nil {
+		return nil, errInvalidInboxReplyResponse
+	}
+	operationID := strings.TrimSpace(response.Header.Get("X-UniPost-Operation-Id"))
+	if envelope.Error.Code != inboxReplyReconcilingCode || strings.TrimSpace(envelope.Error.Message) == "" || operationID == "" {
+		return nil, errInvalidInboxReplyResponse
+	}
+	return &InboxReplyResult{
+		State:       InboxReplyStateReconciling,
+		OperationID: operationID,
+		Code:        inboxReplyReconcilingCode,
+		Message:     envelope.Error.Message,
+		RequestID:   envelope.RequestID,
+	}, nil
 }
