@@ -562,3 +562,437 @@ func TestResponseAwareTransportRetainsClonedMetadata(t *testing.T) {
 		t.Fatalf("response-aware transport mutated custom client: %#v", customClient)
 	}
 }
+
+func TestInboxRemainingEndpointsUseExactRoutesScopesBodiesAndEnvelopes(t *testing.T) {
+	assignedTo := "agent_7"
+	accountID := "acct_x"
+	lookbackDays := 7
+	maxItems := 50
+	confirmationToken := "confirmation-secret"
+	var syncCalls atomic.Int32
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		wantScope := url.Values{
+			"external_user_id": {"managed user"},
+			"inbox_scope":      {"managed_user"},
+		}
+		if got := r.URL.Query(); !reflect.DeepEqual(got, wantScope) {
+			t.Fatalf("unexpected query for %s: %#v, want %#v", r.URL.EscapedPath(), got, wantScope)
+		}
+
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Fatal(err)
+		}
+		w.Header().Set("Content-Type", "application/json")
+
+		switch r.URL.EscapedPath() {
+		case "/v1/inbox/unread-count":
+			if r.Method != http.MethodGet || len(body) != 0 {
+				t.Fatalf("unexpected unread-count request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":{"count":4}}`))
+		case "/v1/inbox/item%2Fwith%20space":
+			if r.Method != http.MethodGet || len(body) != 0 {
+				t.Fatalf("unexpected get request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":` + canonicalInboxReplyItem + `}`))
+		case "/v1/inbox/item%2Fwith%20space/read":
+			if r.Method != http.MethodPost || len(body) != 0 {
+				t.Fatalf("unexpected mark-read request %s %q", r.Method, body)
+			}
+			w.WriteHeader(http.StatusNoContent)
+		case "/v1/inbox/mark-all-read":
+			if r.Method != http.MethodPost || len(body) != 0 {
+				t.Fatalf("unexpected mark-all request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":{"marked":3}}`))
+		case "/v1/inbox/item%2Fwith%20space/thread-state":
+			if r.Method != http.MethodPost || string(body) != `{"thread_status":"assigned","assigned_to":"agent_7"}` {
+				t.Fatalf("unexpected thread-state request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":` + canonicalInboxReplyItem + `}`))
+		case "/v1/inbox/item%2Fwith%20space/media-context":
+			if r.Method != http.MethodGet || len(body) != 0 {
+				t.Fatalf("unexpected media-context request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"media_1","caption":"caption","media_url":"https://example.test/media","timestamp":"2026-07-22T00:00:00Z","media_type":"IMAGE","permalink":"https://example.test/post"}}`))
+		case "/v1/inbox/sync":
+			if r.Method != http.MethodPost {
+				t.Fatalf("unexpected sync method %s", r.Method)
+			}
+			if syncCalls.Add(1) == 1 {
+				if len(body) != 0 {
+					t.Fatalf("ordinary sync must have no body, got %q", body)
+				}
+				_, _ = w.Write([]byte(`{"data":{"new_items":2,"accounts_checked":1,"errors":[{"account_id":"acct_1","platform":"instagram","step":"comments","error":"denied"}],"details":[{"account_id":"acct_1","platform":"instagram","account_name":"Main","media_found":3,"comments_found":2}]}}`))
+				return
+			}
+			wantBody := `{"x_backfill":{"account_id":"acct_x","lookback_days":7,"max_items":50,"include_replies":false,"include_dms":false,"confirmation_token":"confirmation-secret"}}`
+			if string(body) != wantBody {
+				t.Fatalf("unexpected X backfill body %q, want %q", body, wantBody)
+			}
+			_, _ = w.Write([]byte(`{"data":{"confirmation_required":false,"accounts_checked":1,"accepted":2,"suppressed":3,"duplicates":4,"read":5,"details":[{"account_id":"acct_x","accepted":2,"suppressed":3,"duplicates":4,"read":5,"stopped_at_boundary":true,"stop_reason":"limit","missing_scopes":["dm.read"]}]}}`))
+		case "/v1/inbox/x-outbound-operations/request%2Fwith%20space":
+			if r.Method != http.MethodGet || len(body) != 0 {
+				t.Fatalf("unexpected X outbound request %s %q", r.Method, body)
+			}
+			_, _ = w.Write([]byte(`{"data":{"id":"out_1","status":"completed","completion_attempts":2,"reconciliation_required":false,"updated_at":"2026-07-22T00:00:00Z","response_inbox_item_id":"inbox_1"}}`))
+		default:
+			t.Fatalf("unexpected path %q", r.URL.EscapedPath())
+		}
+	}))
+	defer server.Close()
+
+	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+	inbox := client.Inbox.ManagedUser("managed user")
+
+	unread, err := inbox.UnreadCount(context.Background())
+	if err != nil || unread.Count != 4 {
+		t.Fatalf("unexpected unread result %#v, err=%v", unread, err)
+	}
+	item, err := inbox.Get(context.Background(), "item/with space")
+	if err != nil || item.ID != "inbox_1" {
+		t.Fatalf("unexpected get result %#v, err=%v", item, err)
+	}
+	if err := inbox.MarkRead(context.Background(), "item/with space"); err != nil {
+		t.Fatal(err)
+	}
+	marked, err := inbox.MarkAllRead(context.Background())
+	if err != nil || marked.Marked != 3 {
+		t.Fatalf("unexpected mark-all result %#v, err=%v", marked, err)
+	}
+	updated, err := inbox.UpdateThreadState(context.Background(), "item/with space", &InboxThreadStateRequest{
+		ThreadStatus: InboxThreadStatusAssigned,
+		AssignedTo:   &assignedTo,
+	})
+	if err != nil || updated.ID != "inbox_1" {
+		t.Fatalf("unexpected thread-state result %#v, err=%v", updated, err)
+	}
+	media, err := inbox.MediaContext(context.Background(), "item/with space")
+	if err != nil || media.ID != "media_1" || media.MediaType != "IMAGE" {
+		t.Fatalf("unexpected media result %#v, err=%v", media, err)
+	}
+	syncResult, err := inbox.Sync(context.Background())
+	if err != nil || syncResult.NewItems != 2 || len(syncResult.Errors) != 1 || len(syncResult.Details) != 1 {
+		t.Fatalf("unexpected sync result %#v, err=%v", syncResult, err)
+	}
+	xResult, err := inbox.SyncXBackfill(context.Background(), &XInboxBackfillRequest{
+		AccountID:         &accountID,
+		LookbackDays:      &lookbackDays,
+		MaxItems:          &maxItems,
+		IncludeReplies:    false,
+		IncludeDMs:        false,
+		ConfirmationToken: &confirmationToken,
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	completed, ok := xResult.(*XInboxBackfillCompleted)
+	if !ok || completed.AccountsChecked != 1 || len(completed.Details) != 1 || completed.Details[0].MissingScopes == nil {
+		t.Fatalf("unexpected X completed result %#v", xResult)
+	}
+	status, err := inbox.XOutboundStatus(context.Background(), "request/with space")
+	if err != nil || status.ID != "out_1" || status.CompletionAttempts != 2 || status.ResponseInboxItemID == nil {
+		t.Fatalf("unexpected X outbound result %#v, err=%v", status, err)
+	}
+}
+
+func TestInboxWorkspaceRemainingEndpointOmitsManagedUserID(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		want := url.Values{"inbox_scope": {"workspace"}}
+		if got := r.URL.Query(); !reflect.DeepEqual(got, want) {
+			t.Fatalf("unexpected query %#v, want %#v", got, want)
+		}
+		_, _ = w.Write([]byte(`{"data":{"count":1}}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+	result, err := client.Inbox.Workspace().UnreadCount(context.Background())
+	if err != nil || result.Count != 1 {
+		t.Fatalf("unexpected workspace result %#v, err=%v", result, err)
+	}
+}
+
+func TestInboxXBackfillDecodesClosedVariantsAndRejectsMalformedDiscriminants(t *testing.T) {
+	tests := []struct {
+		name     string
+		body     string
+		wantType any
+		wantErr  bool
+	}{
+		{
+			name:     "in progress",
+			body:     `{"data":{"status":"in_progress","confirmation_operation_id":"op_1","execution_lease_expires_at":"2026-07-22T01:00:00Z","confirmation_required":false}}`,
+			wantType: (*XInboxBackfillInProgress)(nil),
+		},
+		{
+			name:     "confirmation required",
+			body:     `{"data":{"confirmation_required":true,"confirmation_token":"token-secret","confirmation_expires_at":"2026-07-22T01:00:00Z","accounts_checked":2}}`,
+			wantType: (*XInboxBackfillConfirmationRequired)(nil),
+		},
+		{
+			name:     "completed",
+			body:     `{"data":{"confirmation_required":false,"accounts_checked":2,"accepted":3,"suppressed":4,"duplicates":5,"read":6}}`,
+			wantType: (*XInboxBackfillCompleted)(nil),
+		},
+		{name: "missing data", body: `{"confirmation_token":"token-secret"}`, wantErr: true},
+		{name: "unknown status", body: `{"data":{"status":"queued","confirmation_token":"token-secret"}}`, wantErr: true},
+		{name: "in progress missing lease", body: `{"data":{"status":"in_progress","confirmation_operation_id":"op_1","confirmation_token":"token-secret"}}`, wantErr: true},
+		{name: "in progress confirmation true", body: `{"data":{"status":"in_progress","confirmation_operation_id":"op_1","execution_lease_expires_at":"later","confirmation_required":true,"confirmation_token":"token-secret"}}`, wantErr: true},
+		{name: "confirmation missing token", body: `{"data":{"confirmation_required":true,"confirmation_expires_at":"later","accounts_checked":1}}`, wantErr: true},
+		{name: "completed missing read", body: `{"data":{"confirmation_required":false,"accounts_checked":1,"accepted":1,"suppressed":0,"duplicates":0,"confirmation_token":"token-secret"}}`, wantErr: true},
+		{name: "malformed details", body: `{"data":{"confirmation_required":false,"accounts_checked":1,"accepted":1,"suppressed":0,"duplicates":0,"read":1,"details":[{"account_id":"acct_1"}],"confirmation_token":"token-secret"}}`, wantErr: true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(tt.body))
+			}))
+			defer server.Close()
+			client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+			result, err := client.Inbox.Workspace().SyncXBackfill(context.Background(), &XInboxBackfillRequest{})
+			if tt.wantErr {
+				if err == nil || result != nil {
+					t.Fatalf("expected error, got result=%#v err=%v", result, err)
+				}
+				if got := err.Error(); got != "unipost: invalid Inbox response" || strings.Contains(got, "token-secret") {
+					t.Fatalf("unexpected unsafe error %q", got)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			if reflect.TypeOf(result) != reflect.TypeOf(tt.wantType) {
+				t.Fatalf("unexpected variant %T, want %T", result, tt.wantType)
+			}
+		})
+	}
+}
+
+func TestInboxWritesAttemptOnceAndDoNotFollowRedirects(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*ScopedInboxService) error
+	}{
+		{name: "mark read", call: func(s *ScopedInboxService) error { return s.MarkRead(context.Background(), "item_1") }},
+		{name: "mark all read", call: func(s *ScopedInboxService) error { _, err := s.MarkAllRead(context.Background()); return err }},
+		{name: "thread state", call: func(s *ScopedInboxService) error {
+			_, err := s.UpdateThreadState(context.Background(), "item_1", &InboxThreadStateRequest{ThreadStatus: InboxThreadStatusOpen})
+			return err
+		}},
+		{name: "sync", call: func(s *ScopedInboxService) error { _, err := s.Sync(context.Background()); return err }},
+		{name: "X backfill", call: func(s *ScopedInboxService) error {
+			_, err := s.SyncXBackfill(context.Background(), &XInboxBackfillRequest{})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var sourceAttempts atomic.Int32
+			var targetAttempts atomic.Int32
+			target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				targetAttempts.Add(1)
+			}))
+			defer target.Close()
+			source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				sourceAttempts.Add(1)
+				http.Redirect(w, r, target.URL, http.StatusTemporaryRedirect)
+			}))
+			defer source.Close()
+
+			client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(source.URL))
+			err := tt.call(client.Inbox.Workspace())
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTemporaryRedirect {
+				t.Fatalf("expected redirect APIError, got %T: %v", err, err)
+			}
+			if sourceAttempts.Load() != 1 || targetAttempts.Load() != 0 {
+				t.Fatalf("unexpected attempts source=%d target=%d", sourceAttempts.Load(), targetAttempts.Load())
+			}
+		})
+	}
+}
+
+func TestInboxWritesDoNotRetryRateLimits(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*ScopedInboxService) error
+	}{
+		{name: "mark read", call: func(s *ScopedInboxService) error { return s.MarkRead(context.Background(), "item_1") }},
+		{name: "mark all read", call: func(s *ScopedInboxService) error { _, err := s.MarkAllRead(context.Background()); return err }},
+		{name: "thread state", call: func(s *ScopedInboxService) error {
+			_, err := s.UpdateThreadState(context.Background(), "item_1", &InboxThreadStateRequest{ThreadStatus: InboxThreadStatusOpen})
+			return err
+		}},
+		{name: "sync", call: func(s *ScopedInboxService) error { _, err := s.Sync(context.Background()); return err }},
+		{name: "X backfill", call: func(s *ScopedInboxService) error {
+			_, err := s.SyncXBackfill(context.Background(), &XInboxBackfillRequest{})
+			return err
+		}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				w.Header().Set("Retry-After", "1")
+				w.WriteHeader(http.StatusTooManyRequests)
+				_, _ = w.Write([]byte(`{"error":{"code":"RATE_LIMITED","message":"try later"}}`))
+			}))
+			defer server.Close()
+
+			client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+			err := tt.call(client.Inbox.Workspace())
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) || apiErr.Status != http.StatusTooManyRequests {
+				t.Fatalf("expected rate-limit APIError, got %T: %v", err, err)
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Fatalf("write made %d attempts, want 1", got)
+			}
+		})
+	}
+}
+
+func TestInboxRemainingMethodsValidateInputsBeforeNetwork(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+	}))
+	defer server.Close()
+	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+	inbox := client.Inbox.Workspace()
+
+	for _, id := range []string{"", "   ", ".", "..", " .. "} {
+		if result, err := inbox.Get(context.Background(), id); err == nil || result != nil {
+			t.Fatalf("Get accepted unsafe ID %q: result=%#v err=%v", id, result, err)
+		}
+		if err := inbox.MarkRead(context.Background(), id); err == nil {
+			t.Fatalf("MarkRead accepted unsafe ID %q", id)
+		}
+		if result, err := inbox.MediaContext(context.Background(), id); err == nil || result != nil {
+			t.Fatalf("MediaContext accepted unsafe ID %q: result=%#v err=%v", id, result, err)
+		}
+		if result, err := inbox.XOutboundStatus(context.Background(), id); err == nil || result != nil {
+			t.Fatalf("XOutboundStatus accepted unsafe ID %q: result=%#v err=%v", id, result, err)
+		}
+	}
+	if result, err := inbox.UpdateThreadState(context.Background(), "item_1", nil); err == nil || result != nil {
+		t.Fatalf("accepted nil thread request: result=%#v err=%v", result, err)
+	}
+	if result, err := inbox.UpdateThreadState(context.Background(), "item_1", &InboxThreadStateRequest{ThreadStatus: "invalid"}); err == nil || result != nil {
+		t.Fatalf("accepted invalid thread status: result=%#v err=%v", result, err)
+	}
+	if result, err := inbox.SyncXBackfill(context.Background(), nil); err == nil || result != nil {
+		t.Fatalf("accepted nil X backfill request: result=%#v err=%v", result, err)
+	}
+	if got := attempts.Load(); got != 0 {
+		t.Fatalf("invalid inputs made %d network requests", got)
+	}
+}
+
+func TestInboxMalformedCanonicalEnvelopesFailClosed(t *testing.T) {
+	tests := []struct {
+		name string
+		call func(*ScopedInboxService) (any, error)
+	}{
+		{name: "unread", call: func(s *ScopedInboxService) (any, error) { return s.UnreadCount(context.Background()) }},
+		{name: "get", call: func(s *ScopedInboxService) (any, error) { return s.Get(context.Background(), "item_1") }},
+		{name: "mark all", call: func(s *ScopedInboxService) (any, error) { return s.MarkAllRead(context.Background()) }},
+		{name: "thread state", call: func(s *ScopedInboxService) (any, error) {
+			return s.UpdateThreadState(context.Background(), "item_1", &InboxThreadStateRequest{ThreadStatus: InboxThreadStatusOpen})
+		}},
+		{name: "media", call: func(s *ScopedInboxService) (any, error) { return s.MediaContext(context.Background(), "item_1") }},
+		{name: "sync", call: func(s *ScopedInboxService) (any, error) { return s.Sync(context.Background()) }},
+		{name: "X status", call: func(s *ScopedInboxService) (any, error) { return s.XOutboundStatus(context.Background(), "request_1") }},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				_, _ = w.Write([]byte(`{"data":{},"secret":"response-secret"}`))
+			}))
+			defer server.Close()
+			client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+			result, err := tt.call(client.Inbox.Workspace())
+			if err == nil {
+				t.Fatalf("expected malformed response error, got result=%#v err=%v", result, err)
+			}
+			if got := err.Error(); got != "unipost: invalid Inbox response" || strings.Contains(got, "response-secret") {
+				t.Fatalf("unexpected unsafe error %q", got)
+			}
+		})
+	}
+}
+
+func TestInboxWebSocketConnectionDetailsAreLocalScopedAndFresh(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+	}))
+	defer server.Close()
+
+	client := NewClient(WithAPIKey("up_test_secret"), WithBaseURL(server.URL))
+	details, err := client.Inbox.ManagedUser("managed user").WebSocketConnectionDetails()
+	if err != nil {
+		t.Fatal(err)
+	}
+	parsed, err := url.Parse(details.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Scheme != "ws" || parsed.Path != "/v1/inbox/ws" || parsed.Query().Get("inbox_scope") != "managed_user" || parsed.Query().Get("external_user_id") != "managed user" {
+		t.Fatalf("unexpected websocket URL %q", details.URL)
+	}
+	if strings.Contains(details.URL, "up_test_secret") || details.Headers["Authorization"] != "Bearer up_test_secret" {
+		t.Fatalf("websocket credentials placed incorrectly: %#v", details)
+	}
+	details.Headers["Authorization"] = "mutated"
+	fresh, err := client.Inbox.ManagedUser("managed user").WebSocketConnectionDetails()
+	if err != nil || fresh.Headers["Authorization"] != "Bearer up_test_secret" {
+		t.Fatalf("later details were mutated: %#v, err=%v", fresh, err)
+	}
+	if attempts.Load() != 0 {
+		t.Fatalf("websocket helper made %d network requests", attempts.Load())
+	}
+
+	secure := NewClient(WithAPIKey("up_test_secret"), WithBaseURL("https://example.test/base?ignored=true"))
+	secureDetails, err := secure.Inbox.Workspace().WebSocketConnectionDetails()
+	if err != nil || secureDetails.URL != "wss://example.test/v1/inbox/ws?inbox_scope=workspace" {
+		t.Fatalf("unexpected secure websocket details %#v, err=%v", secureDetails, err)
+	}
+}
+
+func TestInboxWebSocketConnectionDetailsRejectInvalidConfigurationSafely(t *testing.T) {
+	tests := []struct {
+		name    string
+		baseURL string
+		apiKey  string
+		wantErr string
+	}{
+		{name: "missing key", baseURL: "https://example.test", wantErr: "unipost: API key is required"},
+		{name: "blank key", baseURL: "https://example.test", apiKey: "   ", wantErr: "unipost: API key is required"},
+		{name: "invalid scheme", baseURL: "ftp://url-secret@example.test", apiKey: "key-secret", wantErr: "unipost: invalid WebSocket base URL"},
+		{name: "missing host", baseURL: "https:///path/url-secret", apiKey: "key-secret", wantErr: "unipost: invalid WebSocket base URL"},
+		{name: "userinfo", baseURL: "https://user:url-secret@example.test", apiKey: "key-secret", wantErr: "unipost: invalid WebSocket base URL"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			client := NewClient(WithAPIKey(tt.apiKey), WithBaseURL(tt.baseURL))
+			details, err := client.Inbox.Workspace().WebSocketConnectionDetails()
+			if err == nil || details != nil || err.Error() != tt.wantErr {
+				t.Fatalf("unexpected result details=%#v err=%v", details, err)
+			}
+			if strings.Contains(err.Error(), "key-secret") || strings.Contains(err.Error(), "url-secret") {
+				t.Fatalf("configuration error leaked a secret: %q", err)
+			}
+		})
+	}
+}
