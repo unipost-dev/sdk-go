@@ -104,12 +104,16 @@ accept an arbitrary `external_user_id` from a request body or query string:
 
 ```go
 externalUserID := authenticatedSession.UserID // established by auth middleware
-managedInbox := client.Inbox.ManagedUser(externalUserID)
+managedInbox, err := client.Inbox.ManagedUser(externalUserID)
+if err != nil {
+    return err
+}
 ```
 
 `ManagedUser(externalUserID)` never falls back to workspace access: a blank ID
-fails locally before a request is sent. Use `Workspace()` only for an explicit
-owner/admin aggregate view. Workspace access is authorized by the UniPost API
+returns an error before a scoped resource is created or a request is sent. Use
+`Workspace()` only for an explicit owner/admin aggregate view. Workspace access
+is authorized by the UniPost API
 key and is allowed only while that key's creator remains an owner or admin of
 the UniPost workspace. That authorization is separate from your end-app roles;
 an end-app "admin" label does not grant UniPost workspace access.
@@ -123,7 +127,10 @@ When `limit` is omitted, invalid, zero, or negative, the server uses 50; values
 above 500 are clamped to 500.
 
 ```go
-managedInbox := client.Inbox.ManagedUser(authenticatedSession.UserID)
+managedInbox, err := client.Inbox.ManagedUser(authenticatedSession.UserID)
+if err != nil {
+    return err
+}
 isRead := false
 isOwn := false
 
@@ -419,9 +426,11 @@ post, err := client.Posts.Create(ctx, &unipost.CreatePostParams{
 
 ### Error Handling
 
-All non-2xx API responses use `*unipost.APIError`. `Code` is the resolved
-error code and prefers the canonical `NormalizedCode` when the API supplies
-one. Validation details and rate-limit delay are populated only when applicable.
+All non-2xx API responses use `*unipost.APIError`. `Code` normally prefers the
+canonical `NormalizedCode` when the API supplies one. Inbox reply errors preserve
+the raw server `Code` so callers can distinguish X reconciliation outcomes;
+`NormalizedCode` remains available separately. Validation details and rate-limit
+delay are populated only when applicable.
 
 ```go
 package main

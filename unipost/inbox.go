@@ -295,15 +295,18 @@ type InboxService struct {
 }
 
 // ManagedUser returns an Inbox resource bound to one managed user's stable external ID.
-// A blank ID is rejected locally when an operation is attempted.
-func (s *InboxService) ManagedUser(externalUserID string) *ScopedInboxService {
+// A blank ID is rejected locally before a scoped resource is returned.
+func (s *InboxService) ManagedUser(externalUserID string) (*ScopedInboxService, error) {
+	if strings.TrimSpace(externalUserID) == "" {
+		return nil, fmt.Errorf("unipost: managed user external ID is required")
+	}
 	return &ScopedInboxService{
 		client: s.client,
 		scope: inboxScope{
 			kind:           inboxScopeManagedUser,
 			externalUserID: externalUserID,
 		},
-	}
+	}, nil
 }
 
 // Workspace returns an aggregate Inbox resource for workspace owners and admins.
@@ -612,8 +615,26 @@ func (s *ScopedInboxService) Reply(ctx context.Context, id string, request *Inbo
 		if response.StatusCode >= 200 && response.StatusCode < 300 {
 			return nil, errInvalidInboxReplyResponse
 		}
-		return nil, parseAPIError(response.StatusCode, response.Body)
+		return nil, parseInboxReplyAPIError(response.StatusCode, response.Body)
 	}
+}
+
+func parseInboxReplyAPIError(status int, body []byte) error {
+	err := parseAPIError(status, body)
+	apiErr, ok := err.(*APIError)
+	if !ok {
+		return err
+	}
+
+	var envelope struct {
+		Error struct {
+			Code string `json:"code"`
+		} `json:"error"`
+	}
+	if json.Unmarshal(body, &envelope) == nil && strings.TrimSpace(envelope.Error.Code) != "" {
+		apiErr.Code = envelope.Error.Code
+	}
+	return apiErr
 }
 
 func inboxPathID(id string) (string, error) {

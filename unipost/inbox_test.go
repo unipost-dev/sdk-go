@@ -29,6 +29,18 @@ const canonicalInboxReplyItem = `{
 	"created_at":"2026-07-22T00:00:01Z"
 }`
 
+func requireManagedInbox(t *testing.T, client *Client, externalUserID string) *ScopedInboxService {
+	t.Helper()
+	inbox, err := client.Inbox.ManagedUser(externalUserID)
+	if err != nil {
+		t.Fatalf("ManagedUser(%q): %v", externalUserID, err)
+	}
+	if inbox == nil {
+		t.Fatalf("ManagedUser(%q) returned a nil scope", externalUserID)
+	}
+	return inbox
+}
+
 func TestNewClientInitializesInbox(t *testing.T) {
 	client := NewClient(WithAPIKey("up_test_xxx"))
 	if client.Inbox == nil {
@@ -92,7 +104,7 @@ func TestInboxManagedUserListSerializesScopeFiltersAndDecodesEnvelope(t *testing
 
 	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
 	externalUserID := "user A"
-	managedInbox := client.Inbox.ManagedUser(externalUserID)
+	managedInbox := requireManagedInbox(t, client, externalUserID)
 	externalUserID = "attacker"
 	read := false
 	own := true
@@ -141,6 +153,52 @@ func TestInboxWorkspaceListOmitsExternalIDAndNilFilters(t *testing.T) {
 	}
 }
 
+func TestInboxManagedScopeErrorsDoNotFallbackToWorkspace(t *testing.T) {
+	tests := []struct {
+		name   string
+		status int
+		code   string
+	}{
+		{name: "scoped not found", status: http.StatusNotFound, code: "NOT_FOUND"},
+		{name: "scope lookup failed", status: http.StatusInternalServerError, code: "INBOX_SCOPE_LOOKUP_FAILED"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var attempts atomic.Int32
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				attempts.Add(1)
+				if got := r.URL.Query(); !reflect.DeepEqual(got, url.Values{
+					"inbox_scope":      {"managed_user"},
+					"external_user_id": {"managed user"},
+				}) {
+					t.Fatalf("unexpected scope query %#v", got)
+				}
+				w.Header().Set("Content-Type", "application/json")
+				w.WriteHeader(tt.status)
+				_, _ = w.Write([]byte(`{"error":{"code":"` + tt.code + `","message":"scoped failure"}}`))
+			}))
+			defer server.Close()
+
+			client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+			result, err := requireManagedInbox(t, client, "managed user").Get(context.Background(), "inbox_1")
+			if result != nil {
+				t.Fatalf("expected no result, got %#v", result)
+			}
+			var apiErr *APIError
+			if !errors.As(err, &apiErr) {
+				t.Fatalf("expected *APIError, got %T: %v", err, err)
+			}
+			if apiErr.Status != tt.status || apiErr.Code != tt.code {
+				t.Fatalf("unexpected scoped API error %#v", apiErr)
+			}
+			if got := attempts.Load(); got != 1 {
+				t.Fatalf("managed-scope failure made %d requests, want 1", got)
+			}
+		})
+	}
+}
+
 func TestInboxManagedUserRejectsBlankIDBeforeRequest(t *testing.T) {
 	var requests atomic.Int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -152,9 +210,9 @@ func TestInboxManagedUserRejectsBlankIDBeforeRequest(t *testing.T) {
 	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
 	for _, externalUserID := range []string{"", "   ", "\t\n"} {
 		t.Run(externalUserID, func(t *testing.T) {
-			result, err := client.Inbox.ManagedUser(externalUserID).List(context.Background(), nil)
-			if err == nil {
-				t.Fatalf("expected error, got result %#v", result)
+			scoped, err := client.Inbox.ManagedUser(externalUserID)
+			if err == nil || scoped != nil {
+				t.Fatalf("expected constructor error and nil scope, got scope=%#v err=%v", scoped, err)
 			}
 		})
 	}
@@ -296,7 +354,7 @@ func TestInboxReplyCompletedUsesExactRequestAndRetainsOperationID(t *testing.T) 
 	defer server.Close()
 
 	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
-	result, err := client.Inbox.ManagedUser("managed user").Reply(
+	result, err := requireManagedInbox(t, client, "managed user").Reply(
 		context.Background(),
 		"item/with space",
 		&InboxReplyRequest{Text: "hello"},
@@ -457,6 +515,63 @@ func TestInboxReplyPreservesExplicitAPIErrorsWithoutRetry(t *testing.T) {
 				t.Fatalf("reply made %d attempts for %s, want 1", got, tt.code)
 			}
 		})
+	}
+}
+
+func TestInboxReplyPrefersRawServerCodeOverNormalizedCode(t *testing.T) {
+	var attempts atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts.Add(1)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusConflict)
+		_, _ = w.Write([]byte(`{
+			"error": {
+				"code": "X_RECONNECT_REQUIRED",
+				"normalized_code": "needs_reconnect",
+				"message": "Reconnect the account"
+			}
+		}`))
+	}))
+	defer server.Close()
+
+	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
+	result, err := client.Inbox.Workspace().Reply(
+		context.Background(),
+		"inbox_1",
+		&InboxReplyRequest{Text: "hello"},
+	)
+	if result != nil {
+		t.Fatalf("expected no reply result, got %#v", result)
+	}
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != "X_RECONNECT_REQUIRED" {
+		t.Fatalf("Inbox reply code = %q, want raw X_RECONNECT_REQUIRED", apiErr.Code)
+	}
+	if apiErr.NormalizedCode != "needs_reconnect" {
+		t.Fatalf("normalized code = %q, want needs_reconnect", apiErr.NormalizedCode)
+	}
+	if got := attempts.Load(); got != 1 {
+		t.Fatalf("reply made %d attempts, want 1", got)
+	}
+}
+
+func TestNonInboxAPIErrorStillPrefersNormalizedCode(t *testing.T) {
+	err := parseAPIError(http.StatusConflict, []byte(`{
+		"error": {
+			"code": "X_RECONNECT_REQUIRED",
+			"normalized_code": "needs_reconnect",
+			"message": "Reconnect the account"
+		}
+	}`))
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) {
+		t.Fatalf("expected *APIError, got %T: %v", err, err)
+	}
+	if apiErr.Code != "needs_reconnect" {
+		t.Fatalf("generic API error code = %q, want normalized needs_reconnect", apiErr.Code)
 	}
 }
 
@@ -645,7 +760,7 @@ func TestInboxRemainingEndpointsUseExactRoutesScopesBodiesAndEnvelopes(t *testin
 	defer server.Close()
 
 	client := NewClient(WithAPIKey("up_test_xxx"), WithBaseURL(server.URL))
-	inbox := client.Inbox.ManagedUser("managed user")
+	inbox := requireManagedInbox(t, client, "managed user")
 
 	unread, err := inbox.UnreadCount(context.Background())
 	if err != nil || unread.Count != 4 {
@@ -939,7 +1054,7 @@ func TestInboxWebSocketConnectionDetailsAreLocalScopedAndFresh(t *testing.T) {
 	defer server.Close()
 
 	client := NewClient(WithAPIKey("up_test_secret"), WithBaseURL(server.URL))
-	details, err := client.Inbox.ManagedUser("managed user").WebSocketConnectionDetails()
+	details, err := requireManagedInbox(t, client, "managed user").WebSocketConnectionDetails()
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -950,12 +1065,12 @@ func TestInboxWebSocketConnectionDetailsAreLocalScopedAndFresh(t *testing.T) {
 	if parsed.Scheme != "ws" || parsed.Path != "/v1/inbox/ws" || parsed.Query().Get("inbox_scope") != "managed_user" || parsed.Query().Get("external_user_id") != "managed user" {
 		t.Fatalf("unexpected websocket URL %q", details.URL)
 	}
-	if strings.Contains(details.URL, "up_test_secret") || details.Headers["Authorization"] != "Bearer up_test_secret" {
+	if strings.Contains(details.URL, "up_test_secret") || details.Headers["Authorization"] != "Bearer "+"up_test_secret" {
 		t.Fatalf("websocket credentials placed incorrectly: %#v", details)
 	}
 	details.Headers["Authorization"] = "mutated"
-	fresh, err := client.Inbox.ManagedUser("managed user").WebSocketConnectionDetails()
-	if err != nil || fresh.Headers["Authorization"] != "Bearer up_test_secret" {
+	fresh, err := requireManagedInbox(t, client, "managed user").WebSocketConnectionDetails()
+	if err != nil || fresh.Headers["Authorization"] != "Bearer "+"up_test_secret" {
 		t.Fatalf("later details were mutated: %#v, err=%v", fresh, err)
 	}
 	if attempts.Load() != 0 {
