@@ -3,21 +3,20 @@
 Official UniPost API client for Go.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.5.0
+## Latest release: v0.6.0
 
-Media uploads now support custom audio overlay jobs and optional reserve-time file sizes.
+v0.6.0 adds the production Inbox client for direct messages, comments, and
+replies. Every Inbox operation is explicitly bound to either one managed user
+or the owner/admin workspace aggregate. Replies expose completed and accepted-
+for-reconciliation outcomes, and X backfill uses typed estimate, confirmation,
+in-progress, and completed results.
 
-- Use `client.Media.AudioOverlays.Create(...)` to combine one uploaded video with one uploaded audio file.
-- Poll the job with `client.Media.AudioOverlays.Get(...)`, then publish the returned `OutputMediaID`.
-- Leave `SizeBytes` as zero when reserving media if your app cannot know the raw file length up front.
-- Post failure responses also include the typed v0.4.1 error contract fields.
-
-Supported analytics surfaces include Instagram, Threads, Pinterest, and TikTok when connected account permissions allow them. See `Analytics Explorer` below for code.
+Media audio overlays, analytics, and the other v0.5.0 APIs remain available.
 
 ## Installation
 
 ```bash
-go get github.com/unipost-dev/sdk-go
+go get github.com/unipost-dev/sdk-go@v0.6.0
 ```
 
 ## Quick Start
@@ -92,6 +91,195 @@ if err != nil {
 
 fmt.Println(session.URL)
 ```
+
+### Production Inbox Integration
+
+Inbox API keys are backend credentials. Keep the UniPost workspace key in your
+server-side secret store and create the SDK client only in trusted backend code.
+Never return the key to a managed user or embed it in browser JavaScript, a
+mobile app, a WebSocket URL, or application logs.
+
+Derive the stable external user ID from your app's authenticated session. Do not
+accept an arbitrary `external_user_id` from a request body or query string:
+
+```go
+externalUserID := authenticatedSession.UserID // established by auth middleware
+managedInbox := client.Inbox.ManagedUser(externalUserID)
+```
+
+`ManagedUser(externalUserID)` never falls back to workspace access: a blank ID
+fails locally before a request is sent. Use `Workspace()` only for an explicit
+owner/admin aggregate view. Workspace access is authorized by the UniPost API
+key and is allowed only while that key's creator remains an owner or admin of
+the UniPost workspace. That authorization is separate from your end-app roles;
+an end-app "admin" label does not grant UniPost workspace access.
+
+#### List a managed user's Inbox
+
+`List` supports exactly `Source`, `IsRead`, `IsOwn`, and `Limit`. Boolean filters
+are pointers so an explicit `false` is transmitted instead of being omitted.
+The collection is limit-only: there is no cursor, offset, or pagination API.
+When `limit` is omitted, invalid, zero, or negative, the server uses 50; values
+above 500 are clamped to 500.
+
+```go
+managedInbox := client.Inbox.ManagedUser(authenticatedSession.UserID)
+isRead := false
+isOwn := false
+
+items, err := managedInbox.List(ctx, &unipost.InboxListParams{
+    Source: unipost.InboxSourceXDM,
+    IsRead: &isRead,
+    IsOwn:  &isOwn,
+    Limit:  100,
+})
+if err != nil {
+    return err
+}
+for _, item := range items.Data {
+    fmt.Println(item.ID, item.Source, item.IsRead)
+}
+```
+
+The same scoped resource exposes the remaining read and workflow operations:
+
+```go
+unread, err := managedInbox.UnreadCount(ctx)
+item, err := managedInbox.Get(ctx, "inbox_item_123")
+err = managedInbox.MarkRead(ctx, item.ID)
+marked, err := managedInbox.MarkAllRead(ctx)
+
+assignee := "support-agent-42"
+updated, err := managedInbox.UpdateThreadState(ctx, item.ID, &unipost.InboxThreadStateRequest{
+    ThreadStatus: unipost.InboxThreadStatusAssigned,
+    AssignedTo:   &assignee,
+})
+media, err := managedInbox.MediaContext(ctx, item.ID)
+
+fmt.Println(unread.Count, marked.Marked, updated.ThreadStatus, media.Permalink)
+```
+
+#### Reply exactly once
+
+Create one stable idempotency key for a logical reply and reuse that same key
+if your own job retries. Never resend the same logical reply with a new key.
+The SDK itself performs one POST and does not automatically retry or follow a
+redirect.
+
+HTTP 200 produces `InboxReplyStateCompleted` with an Inbox item. A valid HTTP 202
+produces `InboxReplyStateReconciling`; poll the returned operation ID with
+`XOutboundStatus` instead of sending the reply again.
+
+```go
+idempotencyKey := "reply-order-8721-comment-4" // persist with the logical job
+reply, err := managedInbox.Reply(
+    ctx,
+    "inbox_item_123",
+    &unipost.InboxReplyRequest{Text: "Thanks—we are looking into this."},
+    unipost.WithIdempotencyKey(idempotencyKey),
+)
+if err != nil {
+    return err
+}
+
+switch reply.State {
+case unipost.InboxReplyStateCompleted:
+    fmt.Println("reply item", reply.Item.ID)
+case unipost.InboxReplyStateReconciling:
+    status, err := managedInbox.XOutboundStatus(ctx, reply.OperationID)
+    if err != nil {
+        return err
+    }
+    fmt.Println("reconciliation", status.Status)
+}
+```
+
+#### Backend WebSocket connection details
+
+`WebSocketConnectionDetails()` is local-only: it performs no network request
+and has no WebSocket runtime dependency. It converts the configured HTTP base
+URL to `/v1/inbox/ws`, includes only the bound scope in the URL, and returns the
+key only in the `Authorization` header map.
+
+```go
+details, err := managedInbox.WebSocketConnectionDetails()
+if err != nil {
+    return err
+}
+// Pass details.URL and details.Headers to a backend WebSocket implementation.
+```
+
+Native browser WebSocket APIs cannot attach an `Authorization` header. Do not
+work around that limitation by putting the workspace key in the URL or sending
+it to browser/mobile code; terminate or proxy the connection in your backend.
+
+#### Sync and metered X backfill
+
+Ordinary sync has no backfill request and returns a typed result:
+
+```go
+syncResult, err := managedInbox.Sync(ctx)
+if err != nil {
+    return err
+}
+fmt.Println(syncResult.AccountsChecked, syncResult.NewItems)
+```
+
+`SyncXBackfill` is a separate, metered operation. Review the X credit estimate,
+account selection, lookback, and maximum item count before confirmation. A
+managed-user scope limits the account blast radius to that managed user; a
+workspace scope can cover every eligible account when `AccountID` is omitted.
+Never schedule an unreviewed workspace-wide backfill.
+
+The first call can return a confirmation token. Treat it as a short-lived
+secret: do not log it, persist it in analytics, or expose it to clients. Submit
+the token only after the operator approves the displayed estimate and scope.
+
+```go
+lookbackDays := 7
+maxItems := 250
+estimate, err := managedInbox.SyncXBackfill(ctx, &unipost.XInboxBackfillRequest{
+    LookbackDays:   &lookbackDays,
+    MaxItems:       &maxItems,
+    IncludeReplies: true,
+    IncludeDMs:     true,
+})
+if err != nil {
+    return err
+}
+
+confirmation, ok := estimate.(*unipost.XInboxBackfillConfirmationRequired)
+if ok {
+    if confirmation.EstimatedXCredits != nil {
+        fmt.Println("estimated X credits", *confirmation.EstimatedXCredits)
+    }
+    // Continue only after an operator approves the estimate and scope.
+    confirmationToken := confirmation.ConfirmationToken
+    estimate, err = managedInbox.SyncXBackfill(ctx, &unipost.XInboxBackfillRequest{
+        LookbackDays:      &lookbackDays,
+        MaxItems:          &maxItems,
+        IncludeReplies:    true,
+        IncludeDMs:        true,
+        ConfirmationToken: &confirmationToken,
+    })
+    if err != nil {
+        return err
+    }
+}
+
+switch result := estimate.(type) {
+case *unipost.XInboxBackfillConfirmationRequired:
+    fmt.Println("approval required; accounts", result.AccountsChecked)
+case *unipost.XInboxBackfillInProgress:
+    fmt.Println("backfill operation", result.ConfirmationOperationID)
+case *unipost.XInboxBackfillCompleted:
+    fmt.Println("backfill complete", result.Accepted, result.Suppressed)
+}
+```
+
+For a deliberately reviewed owner/admin aggregate, replace `managedInbox` with
+`client.Inbox.Workspace()` and keep the same methods. Do not use workspace scope
+as an error fallback for a missing managed-user ID.
 
 ### Create Posts
 
