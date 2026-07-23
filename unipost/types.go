@@ -12,9 +12,9 @@ type PageMeta struct {
 }
 
 type apiEnvelope[T any] struct {
-	Data       T       `json:"data"`
+	Data       T        `json:"data"`
 	Meta       PageMeta `json:"meta"`
-	NextCursor string  `json:"next_cursor,omitempty"`
+	NextCursor string   `json:"next_cursor,omitempty"`
 }
 
 func pageMetaFromEnvelope[T any](env apiEnvelope[T]) PageMeta {
