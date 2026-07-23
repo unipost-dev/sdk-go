@@ -419,20 +419,39 @@ post, err := client.Posts.Create(ctx, &unipost.CreatePostParams{
 
 ### Error Handling
 
+All non-2xx API responses use `*unipost.APIError`. `Code` is the resolved
+error code and prefers the canonical `NormalizedCode` when the API supplies
+one. Validation details and rate-limit delay are populated only when applicable.
+
 ```go
-post, err := client.Posts.Create(ctx, params)
-if err != nil {
-    switch e := err.(type) {
-    case *unipost.AuthError:
-        fmt.Println("API key invalid")
-    case *unipost.RateLimitError:
-        fmt.Printf("Rate limited, retry after %ds\n", e.RetryAfter)
-    case *unipost.ValidationError:
-        fmt.Println("Validation failed:", e.Errors)
-    case *unipost.UniPostError:
-        fmt.Printf("API error: %d %s %s\n", e.Status, e.Code, e.Message)
-    default:
-        fmt.Println("Error:", err)
+package main
+
+import (
+    "errors"
+    "fmt"
+
+    "github.com/unipost-dev/sdk-go/unipost"
+)
+
+func logUniPostError(err error) {
+    var apiErr *unipost.APIError
+    if !errors.As(err, &apiErr) {
+        fmt.Println("Request error:", err)
+        return
+    }
+
+    fmt.Printf(
+        "API error: status=%d code=%s normalized_code=%s message=%s\n",
+        apiErr.Status,
+        apiErr.Code,
+        apiErr.NormalizedCode,
+        apiErr.Message,
+    )
+    if len(apiErr.Errors) > 0 {
+        fmt.Println("Validation errors:", apiErr.Errors)
+    }
+    if apiErr.RetryAfter > 0 {
+        fmt.Printf("Retry after %d seconds\n", apiErr.RetryAfter)
     }
 }
 ```

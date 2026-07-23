@@ -30,7 +30,19 @@ func TestReleaseDocumentationCoversInboxContract(t *testing.T) {
 		"XInboxBackfillConfirmationRequired",
 		"XInboxBackfillInProgress",
 		"XInboxBackfillCompleted",
+		"errors.As(err, &apiErr)",
+		"*unipost.APIError",
 	})
+	for _, obsoleteType := range []string{
+		"unipost.AuthError",
+		"unipost.RateLimitError",
+		"unipost.ValidationError",
+		"unipost.UniPostError",
+	} {
+		if strings.Contains(readme, obsoleteType) {
+			t.Errorf("README.md references nonexistent %q", obsoleteType)
+		}
+	}
 
 	changelog := readReleaseDocument(t, "../CHANGELOG.md")
 	requireReleaseMarkers(t, "CHANGELOG.md", changelog, []string{
