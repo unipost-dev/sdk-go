@@ -11,7 +11,7 @@ import (
 const (
 	defaultBaseURL = "https://api.unipost.dev"
 	defaultTimeout = 30 * time.Second
-	sdkVersion     = "0.5.0"
+	sdkVersion     = "0.6.0"
 	userAgent      = "unipost-go/" + sdkVersion
 )
 
@@ -66,6 +66,7 @@ type Client struct {
 	OAuth               *OAuthService
 	Usage               *UsageService
 	Logs                *LogsService
+	Inbox               *InboxService
 }
 
 // NewClient creates a new UniPost API client.
@@ -103,5 +104,6 @@ func NewClient(opts ...Option) *Client {
 	c.OAuth = &OAuthService{client: c}
 	c.Usage = &UsageService{client: c}
 	c.Logs = &LogsService{client: c}
+	c.Inbox = &InboxService{client: c}
 	return c
 }

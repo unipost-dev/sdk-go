@@ -20,7 +20,7 @@ import (
 //	}
 type APIError struct {
 	Status           int                 // HTTP status code
-	Code             string              // Resolved error code (prefers normalized_code)
+	Code             string              // Resolved code; Inbox reply errors preserve the raw server code
 	NormalizedCode   string              // Lowercased canonical code from the API
 	Message          string              // Human-readable message
 	Errors           map[string][]string // 422 field-level errors, when applicable
