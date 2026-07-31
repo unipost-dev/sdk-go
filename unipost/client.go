@@ -67,6 +67,7 @@ type Client struct {
 	Usage               *UsageService
 	Logs                *LogsService
 	Inbox               *InboxService
+	Billing             *BillingService
 }
 
 // NewClient creates a new UniPost API client.
@@ -105,5 +106,6 @@ func NewClient(opts ...Option) *Client {
 	c.Usage = &UsageService{client: c}
 	c.Logs = &LogsService{client: c}
 	c.Inbox = &InboxService{client: c}
+	c.Billing = &BillingService{client: c}
 	return c
 }

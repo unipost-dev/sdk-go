@@ -43,6 +43,9 @@ func TestNewClient_WithAPIKey(t *testing.T) {
 	if client.Logs == nil {
 		t.Error("expected Logs service")
 	}
+	if client.Billing == nil {
+		t.Error("expected Billing service")
+	}
 }
 
 func TestNewClient_FromEnv(t *testing.T) {
