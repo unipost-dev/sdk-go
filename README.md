@@ -3,7 +3,7 @@
 Official UniPost API client for Go.
 Post to 7 social platforms with one API call.
 
-## Latest release: v0.6.0
+## Latest release: v0.7.0
 
 v0.6.0 adds the production Inbox client for direct messages, comments, and
 replies. Every Inbox operation is explicitly bound to either one managed user
@@ -16,7 +16,7 @@ Media audio overlays, analytics, and the other v0.5.0 APIs remain available.
 ## Installation
 
 ```bash
-go get github.com/unipost-dev/sdk-go@v0.6.0
+go get github.com/unipost-dev/sdk-go@v0.7.0
 ```
 
 ## Quick Start

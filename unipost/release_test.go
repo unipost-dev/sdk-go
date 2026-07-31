@@ -7,19 +7,19 @@ import (
 )
 
 func TestReleaseVersion(t *testing.T) {
-	if sdkVersion != "0.6.0" {
-		t.Fatalf("sdkVersion = %q, want 0.6.0", sdkVersion)
+	if sdkVersion != "0.7.0" {
+		t.Fatalf("sdkVersion = %q, want 0.7.0", sdkVersion)
 	}
-	if userAgent != "unipost-go/0.6.0" {
-		t.Fatalf("userAgent = %q, want unipost-go/0.6.0", userAgent)
+	if userAgent != "unipost-go/0.7.0" {
+		t.Fatalf("userAgent = %q, want unipost-go/0.7.0", userAgent)
 	}
 }
 
 func TestReleaseDocumentationCoversInboxContract(t *testing.T) {
 	readme := readReleaseDocument(t, "../README.md")
 	requireReleaseMarkers(t, "README.md", readme, []string{
-		"Latest release: v0.6.0",
-		"go get github.com/unipost-dev/sdk-go@v0.6.0",
+		"Latest release: v0.7.0",
+		"go get github.com/unipost-dev/sdk-go@v0.7.0",
 		"Production Inbox Integration",
 		"ManagedUser(",
 		"Workspace()",
